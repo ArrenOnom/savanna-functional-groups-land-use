@@ -1,2 +1,1 @@
-# savanna-functional-groups-land-use
-Geospatial and ecological analysis of the differential vulnerability of savanna plant functional groups to intensifying agricultural and land-use pressures across the Nigerian Middle Belt.
+Research code, datasets, geospatial workflows, and analytical outputs for assessing the differential vulnerability of savanna plant functional groups to agricultural expansion and land-use pressures in the Nigerian Middle Belt.
