@@ -1,0 +1,189 @@
+// =========================================================================
+// 1. REGION OF INTEREST: NORTH CENTRAL NIGERIA
+// =========================================================================
+var gaul = ee.FeatureCollection("FAO/GAUL/2015/level1");
+
+// Corrected spelling: 'Nassarawa'
+var ncStates = ee.List([
+  'Benue', 'Abuja', 'Kogi', 
+  'Kwara', 'Nassarawa', 'Niger', 'Plateau'
+]);
+
+var northCentral = gaul.filter(ee.Filter.eq('ADM0_NAME', 'Nigeria'))
+                       .filter(ee.Filter.inList('ADM1_NAME', ncStates));
+
+var ncGeometry = northCentral.geometry();
+
+Map.centerObject(northCentral, 6);
+
+// =========================================================================
+// 2. LOAD & PROCESS BII 1KM DATASETS
+// =========================================================================
+var biiCol = ee.ImageCollection("projects/earthengine-legacy/assets/projects/sat-io/open-datasets/BII/BII_1km");
+var mask = ee.Image("projects/earthengine-legacy/assets/projects/sat-io/open-datasets/BII/BII_Mask");
+
+var bands1km = ee.List([
+  'Land_Use', 'Land_Use_Intensity', 'BII_All',
+  'BII_Amphibians', 'BII_Birds', 'BII_Forbs', 'BII_Graminoids',
+  'BII_Mammals', 'BII_All_Plants', 'BII_Reptiles', 'BII_Trees',
+  'BII_All_Vertebrates'
+]);
+
+var biiImage = biiCol.toBands().rename(bands1km);
+
+// Mask out non-valid land use classes (e.g., water bodies / urban non-vegetated)
+var lcMask = biiImage.select('Land_Use').neq(2).and(biiImage.select('Land_Use').neq(5));
+var luiProcessed = biiImage.select('Land_Use_Intensity').updateMask(lcMask).rename('Land_Use_Intensity');
+
+var biiAllPlants = biiImage.select('BII_All_Plants').updateMask(mask).rename('BII_All_Plants');
+var biiTrees     = biiImage.select('BII_Trees').updateMask(mask).rename('BII_Trees');
+var biiForbs     = biiImage.select('BII_Forbs').updateMask(mask).rename('BII_Forbs');
+var biiGraminoids= biiImage.select('BII_Graminoids').updateMask(mask).rename('BII_Graminoids');
+
+// =========================================================================
+// 3. MODERN CLIMATE & TOPOGRAPHY COVARIATES
+// =========================================================================
+// Replace WorldClim with CHIRPS Modern Mean Annual Precipitation (2010-2020 Average)
+var chirps = ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY");
+
+var years = ee.List.sequence(2010, 2020);
+var annualPrecipCol = ee.ImageCollection.fromImages(
+  years.map(function(y) {
+    var annualSum = chirps.filter(ee.Filter.calendarRange(y, y, 'year'))
+                          .select('precipitation')
+                          .sum();
+    return annualSum.set('year', y);
+  })
+);
+
+var meanAnnualPrecip = annualPrecipCol.mean().rename('bio12_precip');
+
+// NASADEM Global Elevation (30-meter native resolution)
+var nasadem = ee.Image('NASA/NASADEM_HGT/001');
+var elevation = nasadem.select('elevation').rename('elevation');
+var slope = ee.Terrain.slope(elevation).rename('slope');
+
+// Coordinates (Pixel Lon/Lat)
+var lonLat = ee.Image.pixelLonLat().rename(['longitude', 'latitude']);
+
+// Primary Land Cover for stratification
+var landUseClass = biiImage.select('Land_Use').rename('Land_Use');
+
+// Combine into single feature stack clipped to study region
+var featureStack = ee.Image.cat([
+  biiAllPlants,
+  biiTrees,
+  biiForbs,
+  biiGraminoids,
+  luiProcessed,
+  meanAnnualPrecip,
+  elevation,
+  slope,
+  lonLat,
+  landUseClass
+]).clip(northCentral);
+
+// =========================================================================
+// 4. DISPLAY ALL LAYERS ON THE MAP CANVAS
+// =========================================================================
+var biiPalette = ['#d7191c', '#fdae61', '#ffffbf', '#a6d96a', '#1a9641']; 
+var luiPalette = ['#2b83ba', '#abdda4', '#ffffbf', '#fdae61', '#d7191c']; 
+var precipPalette = ['#f7fbff', '#c6dbef', '#6baed6', '#2171b5', '#08306b']; 
+var elevPalette = ['#1a9850', '#91cf60', '#d9ef8b', '#fee08b', '#fc8d59', '#d73027']; 
+var slopePalette = ['#ffffff', '#bcbddc', '#756bb1', '#54278f']; 
+
+// Add Target Layers
+Map.addLayer(biiAllPlants.clip(northCentral), {min: 0, max: 1, palette: biiPalette}, 'Target: BII All Plants');
+Map.addLayer(biiTrees.clip(northCentral), {min: 0, max: 1, palette: biiPalette}, 'Target: BII Trees', false);
+Map.addLayer(biiForbs.clip(northCentral), {min: 0, max: 1, palette: biiPalette}, 'Target: BII Forbs', false);
+Map.addLayer(biiGraminoids.clip(northCentral), {min: 0, max: 1, palette: biiPalette}, 'Target: BII Graminoids', false);
+
+// Add Stressor & Control Layers
+Map.addLayer(luiProcessed.clip(northCentral), {min: 0, max: 1, palette: luiPalette}, 'Predictor: Land Use Intensity (LUI)');
+Map.addLayer(meanAnnualPrecip.clip(northCentral), {min: 800, max: 1600, palette: precipPalette}, 'Control: CHIRPS Annual Precip 2010-2020 (mm)', false);
+Map.addLayer(elevation.clip(northCentral), {min: 50, max: 1200, palette: elevPalette}, 'Control: Elevation 30m (NASADEM)', false);
+Map.addLayer(slope.clip(northCentral), {min: 0, max: 25, palette: slopePalette}, 'Control: Slope (Degrees)', false);
+
+// Add Study Area Outline
+var emptyOutline = ee.Image().byte();
+var boundaryOutline = emptyOutline.paint({
+  featureCollection: northCentral,
+  color: 1,
+  width: 2
+});
+Map.addLayer(boundaryOutline, {palette: '000000'}, 'North Central Boundary');
+
+// =========================================================================
+// 5. TASK A: EXPORT INDIVIDUAL GEOTIFF RASTERS (1 KM GRID)
+// =========================================================================
+var targetScale = 1000; // 1 km resampled export scale
+
+var exportLayers = [
+  {image: biiAllPlants,     name: 'BII_All_Plants_1km'},
+  {image: biiTrees,         name: 'BII_Trees_1km'},
+  {image: biiForbs,         name: 'BII_Forbs_1km'},
+  {image: biiGraminoids,    name: 'BII_Graminoids_1km'},
+  {image: luiProcessed,     name: 'Land_Use_Intensity_1km'},
+  {image: meanAnnualPrecip, name: 'CHIRPS_Precipitation_1km'},
+  {image: elevation,        name: 'Elevation_1km'},
+  {image: slope,            name: 'Slope_1km'}
+];
+
+exportLayers.forEach(function(layer) {
+  Export.image.toDrive({
+    image: layer.image.clip(northCentral),
+    description: 'GeoTIFF_' + layer.name,
+    folder: 'GEE_North_Central_Export',
+    fileNamePrefix: layer.name,
+    region: ncGeometry,
+    scale: targetScale,
+    crs: 'EPSG:4326',
+    maxPixels: 1e9,
+    fileFormat: 'GeoTIFF'
+  });
+});
+
+// =========================================================================
+// 6. TASK B: STRATIFIED POINT SAMPLING & EXPORT TO CSV
+// =========================================================================
+var sampledPoints = featureStack.stratifiedSample({
+  numPoints: 3000,
+  classBand: 'Land_Use',
+  region: ncGeometry,
+  scale: targetScale,
+  projection: 'EPSG:4326',
+  geometries: true,
+  tileScale: 4
+});
+
+// Spatial join to append State Name (ADM1_NAME) to each sampled point
+var spatialFilter = ee.Filter.intersects({
+  leftField: '.geo',
+  rightField: '.geo'
+});
+
+var sampledWithState = ee.Join.saveFirst('state_feature').apply({
+  primary: sampledPoints,
+  secondary: northCentral,
+  condition: spatialFilter
+});
+
+var finalSamples = sampledWithState.map(function(feature) {
+  var stateFeature = ee.Feature(feature.get('state_feature'));
+  return feature.set('state', stateFeature.get('ADM1_NAME'));
+});
+
+// Export CSV Table
+Export.table.toDrive({
+  collection: finalSamples,
+  description: 'North_Central_Nigeria_OptionA_ML_Dataset',
+  folder: 'GEE_North_Central_Export',
+  fileFormat: 'CSV',
+  selectors: [
+    'longitude', 'latitude', 'state',
+    'BII_All_Plants', 'BII_Trees', 'BII_Forbs', 'BII_Graminoids',
+    'Land_Use_Intensity', 'bio12_precip', 'elevation', 'slope'
+  ]
+});
+
+print('All layers successfully rendered! Check the "Tasks" tab on the right to execute Drive exports.');
