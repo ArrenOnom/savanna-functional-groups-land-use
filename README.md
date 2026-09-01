@@ -12,7 +12,7 @@ The primary analysis is executed using XGBoost coupled with **5-fold spatial blo
 savanna-functional-groups-land-use/
 ├── LICENSE
 ├── README.md
-├── Savanna_Functional_Groups_Vulnerability_Analysis.ipynb   # Main Jupyter/Colab notebook
+├── Savanna_Functional_Groups_Vulnerability_Analysis.ipynb   # Main Jupyter/Colab notebook, Please click on the notebook and then click on the open with colab to begin 
 ├── Data/
 │   ├── CSV/
 │   │   ├── North_Central_Nigeria_OptionA_ML_Dataset.csv     # 9,001 out-of-fold sample points
